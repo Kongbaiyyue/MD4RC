@@ -1,0 +1,345 @@
+import time
+import json
+from collections import deque
+import sys
+sys.path.append(".")
+
+import numpy as np
+import torch
+
+from model.modules.QueryFormer.utils import formatFilter, formatJoin, TreeNode, filterDict2Hist
+from model.modules.QueryFormer.utils import *
+
+
+
+def node2feature(node, encoding, hist_file, table_sample):
+    # type, join, filter123, mask123
+    # 1, 1, 3x3 (9), 3
+    # TODO: add sample (or so-called table)
+    num_filter = len(node.filterDict['colId'])
+    pad = np.zeros((2,30-num_filter))
+    filts = np.array(list(node.filterDict.values())) #cols, ops, vals
+    ## 3x3 -> 9, get back with reshape 3,3
+    filts = np.concatenate((filts, pad), axis=1).flatten() 
+    # mask = np.zeros(3)
+    mask = np.zeros(30)
+    mask[:num_filter] = 1
+    type_join = np.array([node.typeId, node.join])
+    
+    # hists = filterDict2Hist(hist_file, node.filterDict, encoding)
+
+
+    # table, bitmap, 1 + 1000 bits
+    table = np.array([node.table_id])
+    sample = np.zeros(1000)
+    # if node.table_id == 0:
+    #     sample = np.zeros(1000)
+    # else:
+    #     sample = table_sample[node.query_id][node.table]
+    global_plan_cost = np.array([float(node.start_up_cost), float(node.total_cost), float(node.plan_rows), float(node.plan_width)])
+    local_plan_cost = np.array([float(node.start_up_cost), float(node.total_cost), float(node.plan_rows), float(node.plan_width)])
+    
+    #return np.concatenate((type_join,filts,mask))
+    # print("typ_join",type_join, type_join.dtype)
+    # print("filts", filts, filts.dtype)
+    # print("mask", mask, mask.dtype)
+    # print("tabel", table, table.dtype)
+    # print("sampe", sample, sample.dtype)
+    # print("global_plan_cost", global_plan_cost, global_plan_cost.dtype)
+    # print("local_plan_cost", local_plan_cost, local_plan_cost.dtype)
+    
+    return np.concatenate((type_join, filts, mask, table, sample, global_plan_cost, local_plan_cost), dtype=np.float64)
+
+
+class PlanEncoder():
+    '''
+        sample: [feature, label]
+    '''
+    def __init__(self, df, train=True, encoding=None, tokenizer=None, train_dataset=None):
+        super().__init__()
+        self.encoding = encoding
+        self.treeNodes = []
+        
+        df.loc[:, "json_plan_tensor"] = np.nan
+        df = df[df["plan_json"].str.count("\"Plans\"") < 500]
+        print(df.shape)
+        
+        print(df.columns)
+        
+        # for i in range(df.shape[0]):
+        #     print("plan", df["plan_json"].iloc[i])
+        #     node = json.loads(df["plan_json"].iloc[i])['Plan']
+        #     # print(i)
+        #     # print("node ", self.js_node2dict(i, node))
+        #     a = self.js_node2dict(i, node)
+        #     print(a)
+        #     # df.loc[i, "json_plan_tensor"] = a
+        #     df["json_plan_tensor"].iloc[i] = a
+        #     # print("json_plan_tensor", df["json_plan_tensor"].iloc[i])
+        #     print("node", df["json_plan_tensor"].iloc[i])
+        #     print("node shape", df["json_plan_tensor"].iloc[i]["x"].shape, i)
+            # if i > 10:
+            #     break
+        
+        global i
+        i = 0
+        def get_plan(x):
+            global i
+            i += 1
+            # print("plan", x["plan_json"])
+            # node = json.loads(x["plan_json"])['Plan']
+            
+            t = re.search(r'\[(.*)\]', x["plan_json"].replace('[\'','[\"').replace('\']','\"]').replace(', \'',', \"').replace('\'}','\"}').replace('{\'','{\"').replace('\': ','\": ').replace(': \'',': \"').replace('\', ','\", ').replace('False','false').replace('True','true').replace('\"0\'','\'0\'').replace('\", 0','\', 0'), re.DOTALL).group(0) 
+            node = json.loads(t)[0]['Plan']
+            
+            print(i)
+            # print("node ", self.js_node2dict(i, node))
+            a = self.js_node2dict(i, node)
+            # print(a)
+            # df.loc[i, "json_plan_tensor"] = a
+            x["json_plan_tensor"] = a
+            # print("json_plan_tensor", df["json_plan_tensor"].iloc[i])
+            # print("node", x["json_plan_tensor"])
+            # print("node shape", x["json_plan_tensor"]["x"].shape)
+            return a
+        df["json_plan_tensor"] = df.apply(lambda x: get_plan(x), axis=1)
+
+        # df.to_csv("data/2023_12_03/2023_12_03_5_labels_top_dataset_0.2test_plan_tensor.csv", index=False)
+        # df.to_pickle("data/2023_12_21_21-26_sqlsmith/2024_01_01_01_join_order_label_2.pickle")
+        # df.to_pickle("data/yewu/hgprecn-cn-tl32b9p7800i_test.pickle")
+        df.to_pickle("test111.pickle")
+
+
+    
+    def js_node2dict(self, idx, node):
+        treeNode = self.traversePlan(node, idx, self.encoding)
+        _dict = self.node2dict(treeNode)
+        collated_dict = self.pre_collate(_dict)
+        
+        self.treeNodes.clear()
+        del self.treeNodes[:]
+
+        return collated_dict
+      
+    ## pre-process first half of old collator
+    def pre_collate(self, the_dict, max_node = 500, rel_pos_max = 20):
+
+        x = pad_2d_unsqueeze(the_dict['features'], max_node)
+        N = len(the_dict['features'])
+        attn_bias = torch.zeros([N+1,N+1], dtype=torch.float)
+        
+        edge_index = the_dict['adjacency_list'].t()
+        if len(edge_index) == 0:
+            shortest_path_result = np.array([[0]])
+            path = np.array([[0]])
+            adj = torch.tensor([[0]]).bool()
+        else:
+            adj = torch.zeros([N,N], dtype=torch.bool)
+            adj[edge_index[0,:], edge_index[1,:]] = True
+            
+            shortest_path_result = floyd_warshall_rewrite(adj.numpy())
+        
+        rel_pos = torch.from_numpy((shortest_path_result)).long()
+
+        
+        attn_bias[1:, 1:][rel_pos >= rel_pos_max] = float('-inf')
+        
+        attn_bias = pad_attn_bias_unsqueeze(attn_bias, max_node + 1)
+        rel_pos = pad_rel_pos_unsqueeze(rel_pos, max_node)
+
+        heights = pad_1d_unsqueeze(the_dict['heights'], max_node)
+        
+        return {
+            'x' : x,
+            'attn_bias': attn_bias,
+            'rel_pos': rel_pos,
+            'heights': heights
+        }
+
+
+    def node2dict(self, treeNode):
+
+        adj_list, num_child, features = self.topo_sort(treeNode)
+        heights = self.calculate_height(adj_list, len(features))
+
+        return {
+            # 'features' : torch.FloatTensor(features),
+            'features' : torch.tensor(features, dtype=torch.float64),
+            'heights' : torch.LongTensor(heights),
+            'adjacency_list' : torch.LongTensor(np.array(adj_list)),
+          
+        }
+    
+    def topo_sort(self, root_node):
+#        nodes = []
+        adj_list = [] #from parent to children
+        num_child = []
+        features = []
+
+        toVisit = deque()
+        toVisit.append((0,root_node))
+        next_id = 1
+        while toVisit:
+            idx, node = toVisit.popleft()
+#            nodes.append(node)
+            features.append(node.feature)
+            num_child.append(len(node.children))
+            for child in node.children:
+                toVisit.append((next_id,child))
+                adj_list.append((idx,next_id))
+                next_id += 1
+        
+        return adj_list, num_child, features
+    
+    def traversePlan(self, plan, idx, encoding): # bfs accumulate plan
+
+        nodeType = plan['Node Type']
+        typeId = encoding.encode_type(nodeType)
+        card = None #plan['Actual Rows']
+        filters, alias = formatFilter(plan)
+        join = formatJoin(plan)
+        joinId = encoding.encode_join(join)
+        filters_encoded = encoding.encode_filters(filters, alias)
+        
+        root = TreeNode(nodeType, typeId, filters, card, joinId, join, filters_encoded, plan["Startup Cost"], plan["Total Cost"], plan["Plan Rows"], plan["Plan Width"])
+        
+        self.treeNodes.append(root)
+
+        if 'Relation Name' in plan:
+            root.table = plan['Relation Name']
+            root.table_id = encoding.encode_table(plan['Relation Name'])
+        root.query_id = idx
+        
+        root.feature = node2feature(root, encoding, None, None)
+        #    print(root)
+        if 'Plans' in plan:
+            for subplan in plan['Plans']:
+                subplan['parent'] = plan
+                node = self.traversePlan(subplan, idx, encoding)
+                node.parent = root
+                root.addChild(node)
+        return root
+
+    def calculate_height(self, adj_list,tree_size):
+        if tree_size == 1:
+            return np.array([0])
+
+        adj_list = np.array(adj_list)
+        node_ids = np.arange(tree_size, dtype=int)
+        node_order = np.zeros(tree_size, dtype=int)
+        uneval_nodes = np.ones(tree_size, dtype=bool)
+
+        parent_nodes = adj_list[:,0]
+        child_nodes = adj_list[:,1]
+
+        n = 0
+        while uneval_nodes.any():
+            uneval_mask = uneval_nodes[child_nodes]
+            unready_parents = parent_nodes[uneval_mask]
+
+            node2eval = uneval_nodes & ~np.isin(node_ids, unready_parents)
+            node_order[node2eval] = n
+            uneval_nodes[node2eval] = False
+            n += 1
+        return node_order 
+    
+
+def norm_cost():
+    # df = pd.read_pickle("data/2023_12_21_21-26_sqlsmith/2024_01_01_01_join_order_label_2.pickle")
+    df = pd.read_pickle("data/yewu/hgprecn-cn-tl32b9p7800i_test.pickle")
+    # df = pd.read_pickle("data/2023_12_15_all_sql/2023_12_21_08_labels_top_dataset_plan_tensor_resplit_lg_500_cost_64.pickle")
+    # df2 = pd.read_pickle("data/2023_12_03/2023_12_03_5_labels_top_dataset_0.2test_plan_tensor.pickle")
+    # df2 = pd.read_csv("data/2023_12_03/2023_12_03_5_labels_top_dataset_0.2test_plan_tensor.csv")
+    # df2 = df2[["query", "json_plan_tensor"]]
+    plan_tensor = df["json_plan_tensor"]
+    
+    global_sum = None
+    for i in range(df.shape[0]):
+        if global_sum is None:
+            global_sum = torch.log(df["json_plan_tensor"].iloc[i]["x"][:, :, -8:-4] + 1e-6)
+        else:
+            global_sum = torch.cat([global_sum, torch.log(df["json_plan_tensor"].iloc[i]["x"][:, :, -8:-4] + 1e-6)], dim=0)
+    # global_mean = global_sum / df.shape[0]
+    # global_std = 
+   
+    for i in range(df.shape[0]):
+        df["json_plan_tensor"].iloc[i]["x"][:, :, -8:-4] = (torch.log(df["json_plan_tensor"].iloc[i]["x"][:, :, -8:-4] + 1e-6) - torch.mean(global_sum, dim=[0, 1]) / (torch.std(global_sum, dim=[0, 1]) + 1e-9))
+        df["json_plan_tensor"].iloc[i]["x"] = df["json_plan_tensor"].iloc[i]["x"][:, :, :-4]
+    print(plan_tensor.iloc[0]["x"][:, :, -4:])
+    print(plan_tensor.iloc[0]["x"].shape)
+    # df.to_csv("data/2023_12_03/2023_12_03_5_labels_top_dataset_0.2test_plan_tensor_cost_64.csv", index=False)
+    # df.to_pickle("data/2023_12_21_21-26_sqlsmith/2024_01_01_01_join_order_label_2_log.pickle")
+    # global_cost = plan_tensor[0]["x"][:, :, -8:-4]
+    # local_cost = plan_tensor[0]["x"][:, :, -4:]
+    
+    # global_cost = (global_cost - torch.mean(global_cost, dim=[0, 1])) / ((torch.std(global_cost, dim=[0, 1]) + 1e-6))
+    # print(global_cost)
+    # print(global_cost.shape)
+    print(global_sum.shape)
+    df.to_pickle("data/yewu/hgprecn-cn-tl32b9p7800i_test_norm.pickle")
+    
+    # plan_tensor[0]["x"][:, :, -8:-4] = global_cost
+    
+    # print(global_cost.shape)
+    # df_new = pd.merge(df2, df, left_on="query", right_on="query", how="left")
+    
+    # groups = df_new.groupby("json_plan_tensor_x")
+    # # group_mean = torch.tensor([0, 0, 0, 0], dtype=torch.float64)
+    # for name, group in groups:
+    #     group_sum = torch.tensor([0]*4, dtype=torch.float64)
+    #     for i in range(group.shape[0]):
+    #         # print(group["json_plan_tensor_y"].iloc[i]["x"][:, :, -8:-4])
+    #         group_sum += torch.sum(group["json_plan_tensor_y"].iloc[i]["x"][:, :, -8:-4], dim=[0, 1])
+    #     group_mean = group_mean + group_sum / group.shape[0]
+    #     print(group_mean)
+    #     print("sum: ", group_sum)
+        # group_mean += group["json_plan_tensor_y"]["x"][:, :, -8:-4]
+        # if len(group) > 2:
+        #     for i in range(group.shape[0]):
+        #         print(group["json_plan_tensor_y"].iloc[i]["x"][:, :, -8:-4])
+            
+        #     print(group)
+        #     break
+    # group_mean = group_mean / len(groups)
+    # print(group_mean)
+    # print(group_mean.dtype)
+    # print(df2.drop_duplicates("json_plan_tensor").shape)
+    
+    
+
+if __name__ == "__main__":
+    # df = pd.read_csv("data/2023_12_21_21-26_sqlsmith/2024_01_01_01_join_order_label_2.csv")
+    # # df = df[df["plan_json"] != "0"]
+    # print(df["plan_json"][0])
+    # # print(df[df["plan_json"].str.count("\"Plans\"") > 500])
+    # # print(df[df["plan_json"].str.count("\"Node Type\"") >= 500])
+    # df = df[df["plan_json"].str.count("\"Node Type\"") < 500]
+    # df = pd.read_csv("data/yewu/hgprecn-cn-tl32b9p7800i_test.csv")
+    df = pd.read_csv("data/temp_pretrain_data/query_ex_plan_json_plan1.csv")
+    
+
+    
+    encoding = Encoding(None, {'NA': 0})
+    encoder = PlanEncoder(df, encoding= encoding)
+    # norm_cost()
+    
+    # source_path = "data/all_data/temp_temp_no_plan_tensor_label_log.pickle"
+    # output_path = "data/all_data/temp_temp_no_plan_tensor_label_log.pickle"
+    # norm_cost(source_path, output_path)
+    # df = pd.read_pickle('data/2023_12_15_all_sql/2023_12_21_08_labels_top_dataset_plan_tensor_cost_64.pickle')
+    # # df.drop_duplicates("plan_json", inplace=True)
+    # # print(df["plan_json"][0])
+    # print(df[df["json_plan_tensor"].notna()].shape)
+    # print(df.columns)
+    # print(df.shape)# x2+6x+9=11   (x+k)2 = m 
+    
+    # for i in range(df.shape[0]):
+    #     plan_x = df["json_plan_tensor"].iloc[i]["x"]
+    #     if plan_x.shape[1] > 500:
+    #         print(i)
+    
+    # df = df[df["json_plan_tensor"].map(lambda x: x["x"].shape[1] <= 500)]
+    # print(df.shape)
+    # df.to_pickle("data/2023_12_15_all_sql/2023_12_21_08_labels_top_dataset_plan_tensor_lg_500_cost_64.pickle")
+    
+    pass
