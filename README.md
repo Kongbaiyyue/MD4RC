@@ -16,7 +16,7 @@ pip install -r requirements.txt
 
 ## Pre-training
 ```bash
-python pretrain.py
+python model/pretrain/pretrain.py
 ```
 
 ## Training and Inference
