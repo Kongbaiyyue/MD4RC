@@ -13,24 +13,24 @@ from sklearn.metrics import ndcg_score
 from torch.utils.data import random_split
 from data.data import Tensor_Opt_modal_dataset
 from model.modules.QueryFormer.utils import Encoding, collator
-from models import Model, ThreeMulModel
-from other_models import GaussModel
+from utils.models import Model, ThreeMulModel
+from utils.other_models import GaussModel
 from model.modules.FuseModel.CrossTransformer import CrossTransformer, GlobalLocalCrossTransformer
 from model.modules.FuseModel.module import MultiHeadedAttention, ThreeMultiHeadedAttention, LocalGlobalMultiHeadedAttention, LogTimesMultiHeadedAttention
-from top_model import TopModel, ConcatOptModel, TopRealEstModel, OnlyPlanModel, CommonSpecialModel, PlanMainModel, gateModel, TopConstractModel, gateHierarchicalModel, CrossSQLPlanModel, GateAttnModel, SQLOptModel, PlanOptModel, LogOptModel, TimeOptModel, GateCommonDiffAttnModel, GateComDiff1AttnModel, GateCommonAttnModel, GateContrastCommonAttnModel
+from utils.top_model import TopModel, ConcatOptModel, TopRealEstModel, OnlyPlanModel, CommonSpecialModel, PlanMainModel, gateModel, TopConstractModel, gateHierarchicalModel, CrossSQLPlanModel, GateAttnModel, SQLOptModel, PlanOptModel, LogOptModel, TimeOptModel, GateCommonDiffAttnModel, GateComDiff1AttnModel, GateCommonAttnModel, GateContrastCommonAttnModel
 from model.pretrain_opt_model import GateComDiffPretrainModel, GatePretrainModel
-from times_model import TimeSeriesModel, TimeSoftmaxModel
-from pretrain_time import CustomConvAutoencoder
+from utils.times_model import TimeSeriesModel, TimeSoftmaxModel
+from pretrain import CustomConvAutoencoder
 
 from model.loss.loss import CMD, DiffLoss, ThresholdLoss 
 from model.loss.loss import MarginLoss, ListnetLoss, ListMleLoss, MSEThresholdLoss
 from train import *
 # from train_opt import load_dataset as  load_dataset_tensor
-from train_opt import train as train_opt
-from train_opt_constract import train as train_opt_constract
-from pretrain_train_opt import train as train_opt_all
-from config import Args, ArgsPara, TrainConfig
-from evaluate import evaluate_tau, ndcg_2, top1_margin
+from utils.train_opt import train as train_opt
+from utils.train_opt_constract import train as train_opt_constract
+from utils.pretrain_train_opt import train as train_opt_all
+from utils.config import Args, ArgsPara, TrainConfig
+from utils.evaluate import evaluate_tau, ndcg_2, top1_margin
 
 
 cross_model = {"CrossTransformer": CrossTransformer, "GlobalLocalCrossTransformer": GlobalLocalCrossTransformer}
@@ -409,7 +409,7 @@ def test(model, test_dataloader, tokenizer, device, wdb, test_len, epoch, model_
 
 def train(data_path, select_model,  use_fuse_model, train_dataloader, test_dataloader, valid_dataloader, train_len, test_len, valid_len, train_dataset, betas = (0.9, 0.999), lr = 0.0003, batch_size = 8, epoch = 50, l_input_dim = 13,
         t_input_dim = 9,l_hidden_dim = 64, t_hidden_dim = 64, input_dim = 12, emb_dim = 32, fuse_num_layers = 3,
-        fuse_ffn_dim = 128, fuse_head_size = 4, dropout = 0.1, opt_threshold = 0.1, time_t=1., model_path_dir=None,  res_path=None, model_name=None,use_metrics=True, use_log=True, use_softmax=True, use_margin_loss=False, use_label_loss=False, use_weight_loss=False, use_threshold_loss=False, margin_loss_type="MarginLoss", multi_head="all_cross", name=None, plan_args=None, para_args=None, attn_model_name="MultiHeadedAttention", cross_model_name="CrossTransformer"):
+        fuse_ffn_dim = 128, fuse_head_size = 4, dropout = 0.1, opt_threshold = 0.1, time_t=1., model_path_dir=None,  res_path=None, model_name=None,use_metrics=True, use_log=True, use_softmax=True, use_margin_loss=False, use_label_loss=False, use_weight_loss=False, use_threshold_loss=False, margin_loss_type="MarginLoss", multi_head="all_cross", name=None, plan_args=None, para_args=None, attn_model_name="MultiHeadedAttention", cross_model_name="CrossTransformer",config=None):
     # 超参数监控
     if valid_dataloader is None:
         use_valid_dataset = False
@@ -418,12 +418,12 @@ def train(data_path, select_model,  use_fuse_model, train_dataloader, test_datal
     # start a new wandb run to track this script
     if not os.path.exists(model_path_dir):
         os.mkdir(model_path_dir)
-        
-    
+            
     device = plan_args.device
 
+    tokenizer = BertTokenizer.from_pretrained("google-bert/bert-base-uncased")
     # query tokenizer
-    tokenizer = BertTokenizer.from_pretrained("./bert-base-uncased")
+    tokenizer = BertTokenizer.from_pretrained("google-bert/bert-base-uncased")
     mul_label_loss_fn = nn.BCELoss(reduction="mean")
     opt_label_loss_fn = nn.MSELoss(reduction="mean")
     # opt_label_loss_fn = MSEThresholdLoss(threshold=para_args.std_threshold, factor=para_args.threshold_factor)
@@ -437,7 +437,7 @@ def train(data_path, select_model,  use_fuse_model, train_dataloader, test_datal
 
     print("start train")
 
-    sql_model = BertModel.from_pretrained("./bert-base-uncased")
+    sql_model = BertModel.from_pretrained("bert-base-uncased")
     # time_model = TimeSoftmaxModel(t_input_dim, t_hidden_dim, emb_dim, device=device, t=time_t, use_softmax=use_softmax)
     time_model = CustomConvAutoencoder()
 
@@ -1011,6 +1011,7 @@ if __name__ == '__main__':
     use_valid_dataset = True
     dataset_cls = "0.05rate_valid"
     data_path='data/t2.pickle'
+    print('loading_dataset')
     train_dataloader, test_dataloader, valid_dataloader, train_len, test_len, valid_len, train_dataset = load_dataset(data_path, batch_size=batch_size)
     # train_dataloader, test_dataloader, train_len, test_len, train_dataset    = load_dataset(data_path, batch_size=batch_size)
     config = TrainConfig()
@@ -1034,7 +1035,7 @@ if __name__ == '__main__':
     config.use_fuse_model = True
     config.use_metrics = True
     config.use_log = True
-    
+    config.pretrain_model = f'save/pretrain_model.pth'
     config.use_margin_loss = False
     config.use_threshold_loss = False
 
@@ -1042,6 +1043,4 @@ if __name__ == '__main__':
     para_args.margin_weight = margin_weight
   
     config.train_name = f"{config.model_name} Parameter 3090" 
-    train(data_path,model_name,config.use_fuse_model, train_dataloader, test_dataloader, valid_dataloader, train_len, test_len, valid_len, train_dataset,plan_args= plan_args,para_args=para_args,model_path_dir='./save',model_name=model_name)
-
-
+    train(data_path,model_name,config.use_fuse_model, train_dataloader, test_dataloader, valid_dataloader, train_len, test_len, valid_len, train_dataset,plan_args= plan_args,para_args=para_args,model_path_dir='./save',model_name=model_name,config=config)
