@@ -7,6 +7,8 @@ We propose MD4RC, the first method to utilize a multimodal approach for identify
 ## Installation
 First clone the repository using Git.
 
+Some data can be downloaded from this [link](https://drive.google.com/file/d/1L26JZDH6TJdleJkGaPbWjNSQm9E3CuO2/view?usp=drive_link), Place the data files into the `data` folder. 
+
 The project dependencies can be installed by executing the following commands in the root of the repository:
 ```bash
 conda env create --name MD4RC python=3.9

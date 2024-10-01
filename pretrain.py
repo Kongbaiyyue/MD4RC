@@ -96,7 +96,7 @@ if __name__ == "__main__":
           model.train()  
           epoch_loss = 0.0
           file = {}
-          file['mask_plan'] = open('utils/mask_table_plan/plan_mask_1w.txt','r')
+          file['mask_plan'] = open('data/plan_mask_1w.txt','r')
           batch_list={}
           while i <= 10110:
             for mod in ['mask_plan']:
