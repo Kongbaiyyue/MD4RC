@@ -23,7 +23,7 @@ if __name__ == '__main__':
     device = args.device
     use_valid_dataset = True
     dataset_cls = "0.05rate_valid"
-    data_path = f"data/{args.dataset}.pickle"
+    data_path = f"data/{args.dataset}.csv"
 
 
     if use_valid_dataset:

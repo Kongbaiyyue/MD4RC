@@ -20,7 +20,7 @@ def load_dataset(data_path, batch_size = 8, device="cpu"):
     print("data path", path)
     # df = pd.read_csv(path)
     
-    df = pd.read_pickle(path)
+    df = pd.read_csv(path)
     print(df.columns)
     print(df.shape)
     def get_timeseries(x):
@@ -81,7 +81,7 @@ def load_dataset_valid(data_path, batch_size = 8, device="cpu"):
 
     path = data_path
     
-    df = pd.read_pickle(path)
+    df = pd.read_csv(path)
 
     # def get_timeseries(x):
     #     labels = ['CPU_percent', 'IO_read_standard', 'IO_write_standard', 'IO_read', 'IO_write', 'Memory_percent', 'Memory_used']
