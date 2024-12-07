@@ -29,7 +29,7 @@ class Tensor_Opt_modal_dataset(data.Dataset):
                 
                 logs.append(torch.tensor(samples[2]))
                 timeseries.append(torch.tensor(samples[3]))
-                opt_labels.append(torch.tensor(samples[5]))
+                opt_labels.append(torch.tensor(eval(samples[5])))
             
 
             logs = torch.stack(logs, dim=0)
@@ -60,10 +60,10 @@ class Tensor_Opt_modal_dataset(data.Dataset):
                    "plan": samples[1], 
                    "log": (torch.tensor(samples[2]) - self.logs_train_mean) / (self.logs_train_std + 1e-6),
                     "timeseries": (torch.tensor(samples[3]) - self.timeseries_train_mean.unsqueeze(1)) / (self.timeseries_train_std.unsqueeze(1) + 1e-6), 
-                    "multilabel": torch.tensor(samples[4]), 
-                    "opt_label": (torch.tensor(samples[5])  - self.opt_labels_train_mean) / (self.opt_labels_train_std + 1e-6),
+                    "multilabel": torch.tensor(eval(samples[4])), 
+                    "opt_label": (torch.tensor(eval(samples[5]))  - self.opt_labels_train_mean) / (self.opt_labels_train_std + 1e-6),
                     "duration": samples[6],
-                    "ori_opt_label": (torch.tensor(samples[5])  - self.opt_labels_train_mean) / (self.opt_labels_train_std + 1e-6)
+                    "ori_opt_label": (torch.tensor(eval(samples[5]))  - self.opt_labels_train_mean) / (self.opt_labels_train_std + 1e-6)
             }
             samples_data.append(sam)
 
